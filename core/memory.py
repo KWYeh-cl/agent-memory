@@ -24,6 +24,11 @@ from datetime import datetime, timezone
 DB_PATH = os.environ.get("AGENT_MEMORY_DB", "agent_memory.db")
 COMPRESS_THRESHOLD = int(os.environ.get("AGENT_MEMORY_COMPRESS_AT", "12"))
 
+# Resolve bundled files relative to this module so callers work from any cwd
+# (the MCP server is launched from the CLI's working dir, not this directory).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+SCHEMA_PATH = os.path.join(_HERE, "schema.sql")
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
@@ -40,7 +45,7 @@ def connect(db_path: str = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def init_db(db_path: str = DB_PATH, schema_path: str = "schema.sql") -> None:
+def init_db(db_path: str = DB_PATH, schema_path: str = SCHEMA_PATH) -> None:
     with open(schema_path, "r", encoding="utf-8") as f:
         schema = f.read()
     conn = connect(db_path)
