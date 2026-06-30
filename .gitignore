@@ -1,0 +1,16 @@
+# local memory store + machine-specific generated configs
+agent_memory.db
+*.db
+dist/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# backups created during setup
+*.bak
+
+# os
+.DS_Store

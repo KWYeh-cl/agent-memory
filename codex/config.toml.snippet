@@ -1,0 +1,50 @@
+# ============================================================================
+# Codex memory wiring — paste into ~/.codex/config.toml (user) or
+# <project>/.codex/config.toml (project; loads only when the project is trusted).
+# Replace REPLACE_WITH_ABS_PATH everywhere.
+# ============================================================================
+
+# --- MCP server (the in-session tool surface; same server as Claude Code) ----
+# Confirmed format: Codex reads [mcp_servers.<name>] from config.toml.
+[mcp_servers.agent-memory]
+command = "python3"
+args = ["REPLACE_WITH_ABS_PATH/agent-memory/core/mcp_server.py"]
+env = { AGENT_MEMORY_DB = "REPLACE_WITH_ABS_PATH/agent-memory/agent_memory.db" }
+# List tools in-session with /mcp once Codex restarts.
+
+# --- Skill (portable) --------------------------------------------------------
+# Put the shared skill at <project>/.agents/skills/agent-memory/SKILL.md
+# (or ~/.codex/skills/agent-memory/SKILL.md for a user-wide skill).
+# No config needed; Codex auto-discovers it. Restart Codex if it doesn't appear.
+
+# --- Hooks (deterministic layer) --------------------------------------------
+# Codex supports command hooks, but the exact event identifiers/fields differ
+# from Claude Code and have been changing. VERIFY the current event names and
+# schema against the Codex "Hooks" doc (developers.openai.com/codex) before
+# relying on this — the block below is the intended SHAPE, not guaranteed keys.
+#
+# What each hook must call (same CLI as Claude Code uses):
+#   on prompt submit -> python3 REPLACE_WITH_ABS_PATH/agent-memory/core/mem_cli.py find "<prompt>"
+#                       (its stdout should be injected into context)
+#   on session start -> python3 .../mem_cli.py session-start "<session_id>"
+#   on turn/stop     -> python3 .../mem_cli.py seal-reminder "<session_id>"
+#                       (non-zero exit should surface the reminder to the model)
+#
+# Example skeleton (adjust event names + how the prompt/session id are passed):
+#
+# [[hooks]]
+# event = "user_prompt_submit"   # <-- verify the real event name
+# command = ["python3", "REPLACE_WITH_ABS_PATH/agent-memory/core/mem_cli.py", "find", "{{prompt}}"]
+#
+# [[hooks]]
+# event = "session_start"        # <-- verify
+# command = ["python3", "REPLACE_WITH_ABS_PATH/agent-memory/core/mem_cli.py", "session-start", "{{session_id}}"]
+#
+# [[hooks]]
+# event = "turn_end"             # <-- verify (Stop/SessionEnd equivalent)
+# command = ["python3", "REPLACE_WITH_ABS_PATH/agent-memory/core/mem_cli.py", "seal-reminder", "{{session_id}}"]
+#
+# If Codex's hook events can't inject context or block the turn the way you need,
+# the MCP tools + skill + AGENTS.md still give you the full workflow — you just
+# lose the *deterministic* guarantee on the opening query and the seal, which
+# then rely on the model following the protocol (advisory, like any prompt rule).

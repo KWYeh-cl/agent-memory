@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "agent-memory": {
+      "command": "python3",
+      "args": ["REPLACE_WITH_ABS_PATH/agent-memory/core/mcp_server.py"],
+      "env": {
+        "AGENT_MEMORY_DB": "REPLACE_WITH_ABS_PATH/agent-memory/agent_memory.db"
+      }
+    }
+  }
+}
