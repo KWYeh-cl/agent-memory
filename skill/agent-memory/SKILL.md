@@ -17,8 +17,12 @@ store summaries + pointers, load detail only on demand.
 - `memory_find_related_tasks(query, tags)` — search prior work; light records only.
 - `memory_get_task_detail(task_id)` — a task's summary, checkpoints, artifact pointers.
 - `memory_get_artifact(artifact_id)` — one heavy artifact body. Expensive; use sparingly.
-- `memory_save_checkpoint(...)` — seal a stage of work.
+- `memory_save_checkpoint(...)` — seal a stage of work. Nothing is created before this:
+  the store is lazily initialized on the first call, per-project.
 - `memory_link_tasks(from, to, relation)` — record a stable relationship.
+
+Every tool takes an optional `db_path`. Default is a cwd-relative `agent_memory.db`
+(one store per project); pass `db_path` explicitly if you need a different file.
 
 ## Starting a task
 A prompt-submit hook usually injects a `<related_prior_tasks>` block already. If
@@ -40,6 +44,9 @@ Seal the work with `memory_save_checkpoint`:
   agent to take the correct next step", not a full replay.
 
 A stop hook will remind you if you finish without sealing — but seal proactively.
+The reminder only fires when this session's prompts showed memory intent
+(continue/resume/checkpoint/記得/之前/etc.); it stays silent otherwise, so
+don't rely on it for tasks that never mentioned wanting memory.
 
 ## Linking
 If this task clearly depends_on / supersedes / derived_from a specific prior

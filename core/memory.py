@@ -75,18 +75,27 @@ def find_related_tasks(query: str = "", tags=None, limit: int = 5, db_path: str 
 
     Matches by FTS over title/summary AND/OR by tag overlap. Returns only
     id/title/summary/status/tags — never any checkpoint or artifact body.
+
+    Never creates the db file: nothing has been saved here yet if it's absent.
     """
+    if not os.path.exists(db_path):
+        return []
     conn = connect(db_path)
     hits = {}
 
     if query:
-        # FTS5 MATCH; fall back to LIKE if the query has no usable tokens.
+        # FTS5 MATCH; OR the tokens so a long natural-language prompt still
+        # matches on partial overlap (bare "a b c" would require ALL of
+        # a/b/c present, which real prompts almost never satisfy).
+        # Falls back to LIKE if the query has no usable tokens.
+        tokens = [t.replace('"', '""') for t in query.split() if t.strip()]
+        fts_query = " OR ".join(f'"{t}"' for t in tokens) if tokens else query
         try:
             rows = conn.execute(
                 """SELECT t.id, t.title, t.summary, t.status
                    FROM tasks_fts f JOIN tasks t ON t.id = f.id
                    WHERE tasks_fts MATCH ? LIMIT ?""",
-                (query, limit * 2),
+                (fts_query, limit * 2),
             ).fetchall()
         except sqlite3.OperationalError:
             like = f"%{query}%"
@@ -132,7 +141,11 @@ def get_task_detail(task_id: str, db_path: str = DB_PATH):
 
     Artifact bodies are not included — only their id + description, so the
     agent can decide whether any are worth pulling with get_artifact().
+
+    Never creates the db file: nothing has been saved here yet if it's absent.
     """
+    if not os.path.exists(db_path):
+        return None
     conn = connect(db_path)
     task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if task is None:
@@ -166,6 +179,8 @@ def get_task_detail(task_id: str, db_path: str = DB_PATH):
 # LOAD HEAVY CONTENT  — the only path that reads an artifact body
 # ----------------------------------------------------------------------------
 def get_artifact(artifact_id: str, db_path: str = DB_PATH):
+    if not os.path.exists(db_path):
+        return None
     conn = connect(db_path)
     row = conn.execute("SELECT * FROM artifacts WHERE id = ?", (artifact_id,)).fetchone()
     conn.close()
@@ -192,7 +207,12 @@ def save_checkpoint(
     `artifacts` is a list of {"description": str, "content": str}. The content
     body is stored once and never re-read unless explicitly requested later.
     Returns {task_id, checkpoint_id, seq, compressed}.
+
+    This is the only place memory gets created: the store at `db_path` is
+    lazily initialized here (idempotent) rather than at session/server start,
+    so nothing is written until a session actually decides to save one.
     """
+    init_db(db_path)
     conn = connect(db_path)
     now = _now()
     with conn:

@@ -19,9 +19,14 @@ in place, and the verification in Phase D passes.
    (`<file>.bak`) and merge the new keys in. Never clobber an existing
    `settings.json`/`config.toml`/`CLAUDE.md`. Never overwrite an existing
    `agent_memory.db` or an existing `skill/agent-memory/`.
-3. **One DB, one path.** Every entry point (MCP server `env`, all hooks) must
-   point `AGENT_MEMORY_DB` at the *same* absolute file. If they diverge, tools and
-   hooks record to different stores and nothing lines up.
+3. **No global `AGENT_MEMORY_DB`.** Do not set it in the MCP server `env`, in
+   any hook command, or anywhere in `ROOT/`. Memory is per-project and lazy —
+   leave the default (cwd-relative `agent_memory.db`) so each project gets its
+   own store, created only when that project's first `memory_save_checkpoint`
+   fires. Pinning a global path recreates the old bug: a stray DB wherever the
+   CLI happens to launch from. If one project genuinely needs a non-default
+   location, that's a `db_path` argument on the MCP tool calls (or that
+   project's own `.claude/settings.json`/`.mcp.json`), never a global setting.
 4. **No secrets in any file.** These configs hold paths only.
 5. **Idempotent.** Re-running this runbook must not duplicate hooks, re-init the
    DB, or double-register the server. Check before you add.
@@ -55,15 +60,21 @@ hook commands.
 ```bash
 cd ROOT/core
 python3 -m pip install -r requirements.txt
-test -f ROOT/agent_memory.db || python3 mem_cli.py init
 ```
 
-The DB defaults to the current directory. To keep it at `ROOT/agent_memory.db`,
-set `AGENT_MEMORY_DB=ROOT/agent_memory.db` when running, and use that same path
-in every config below.
+No DB is created in this phase, and none should be — `ROOT/` holds shared
+scripts only. Memory itself is per-project and lazy: nothing is written
+anywhere until a session's first `memory_save_checkpoint` call, at which point
+it lands at a cwd-relative `agent_memory.db` in *that project*, not `ROOT`. Do
+not set a global `AGENT_MEMORY_DB` anywhere in this setup — that would defeat
+per-project isolation and risks creating a stray DB wherever a CLI happens to
+be launched from (e.g. the user's home directory). Every `memory_*` MCP tool
+also accepts an explicit `db_path` if a session needs to target a specific
+file instead of the cwd default.
 
-**Check:** `python3 mem_cli.py find "setup smoke test"` runs without error
-(prints nothing on an empty DB — that's correct).
+**Check:** `python3 mem_cli.py find "setup smoke test"` runs without error and
+prints nothing (no prior work, and — importantly — no db file gets created by
+this read-only call: `ls agent_memory.db` should still fail).
 
 ---
 
@@ -128,18 +139,25 @@ shows `agent-memory`.
 
 1. **Tools reachable:** in the CLI, confirm `memory_find_related_tasks` and
    `memory_save_checkpoint` appear in the tool/`/mcp` listing.
-2. **Opening query injects (Claude Code):** start a task; confirm a
-   `<related_prior_tasks>` block appears (empty DB → no block, which is fine).
-   Also confirm by hand:
+2. **Opening query injects, and creates nothing (Claude Code):** in a project
+   with no prior memory, start a task; confirm no `<related_prior_tasks>` block
+   appears, and confirm no db file was created:
    ```bash
-   AGENT_MEMORY_DB=ROOT/agent_memory.db python3 ROOT/core/mem_cli.py find "test"
+   cd <some project dir>
+   python3 ROOT/core/mem_cli.py find "test"   # prints nothing
+   ls agent_memory.db                          # must fail — nothing created
    ```
-3. **Seal reminder fires (Claude Code):** run a trivial task and end the turn
-   without calling `memory_save_checkpoint`; the Stop hook should surface a
-   reminder once. (It fires at most once per session by design.)
-4. **Round-trip:** ask the model to save a checkpoint for a dummy task, then in a
-   fresh session ask about the same topic; confirm the prior task surfaces and its
-   detail loads via `memory_get_task_detail`.
+3. **Seal reminder is gated on memory intent (Claude Code):** a prompt with no
+   memory-intent keywords (e.g. "fix this typo"), ended without calling
+   `memory_save_checkpoint`, must produce NO reminder. A prompt that does
+   mention intent (e.g. "continue where we left off"), ended the same way,
+   must produce the reminder exactly once. (Fires at most once per session by
+   design, and must not create a db file if none exists yet.)
+4. **Round-trip:** ask the model to save a checkpoint for a dummy task (this
+   creates `<project>/agent_memory.db`), then in a fresh session in the *same*
+   project directory ask about the same topic; confirm the prior task surfaces
+   and its detail loads via `memory_get_task_detail`. Confirm a *different*
+   project directory does NOT see it (per-project isolation).
 
 Report which checks passed. If 2 or 3 didn't fire, the hooks aren't wired —
 re-check the paths in `settings.json` and that `python3` resolves.
@@ -151,13 +169,14 @@ re-check the paths in `settings.json` and that `python3` resolves.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `/mcp` doesn't list the server | wrong path / not restarted | fix abs path in `.mcp.json` or re-run `claude mcp add`; restart |
-| Tools listed but every call errors | DB path mismatch / missing deps | ensure one `AGENT_MEMORY_DB`; `pip install -r core/requirements.txt` |
+| Tools listed but every call errors | missing deps, or calling a task-scoped tool with a `task_id` from a different project's db | `pip install -r core/requirements.txt`; remember each project has its own store |
+| A db file shows up somewhere unexpected | something (script, hook, config) is forcing `AGENT_MEMORY_DB` | grep for `AGENT_MEMORY_DB=` across settings.json/config.toml/hooks — remove it, per operating rule 3 |
 | Opening query never injects | prompt hook not firing | check `UserPromptSubmit` entry + that the hook is executable + `python3` on PATH |
 | Seal reminder never fires | Stop hook path wrong, or already fired this session | check `Stop` entry; reminder is one-shot per session by design |
 | Skill never triggers | description didn't match | it's advisory; the hooks/MCP still work — invoke `/agent-memory` explicitly if needed |
 
 ## Do NOT
 - Do not enable Codex hooks with unverified event names.
-- Do not point hooks and the MCP server at different DB files.
-- Do not overwrite existing `settings.json` / `config.toml` / `CLAUDE.md` / the DB.
+- Do not set a global `AGENT_MEMORY_DB` anywhere (MCP `env`, hook commands, `ROOT/`).
+- Do not overwrite existing `settings.json` / `config.toml` / `CLAUDE.md` / any project's DB.
 - Do not add any credentials or tokens to these files.

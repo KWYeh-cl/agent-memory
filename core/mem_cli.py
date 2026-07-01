@@ -8,10 +8,13 @@ hooks use this CLI for the two steps that must happen no matter what:
 
   find            -> opening query, printed as an injectable context block
                      (wire to a prompt-submit hook)
-  session-start   -> record a per-session timestamp sentinel
-  seal-reminder   -> if no checkpoint was written since session start, emit a
-                     reminder and exit 2 so the harness feeds it back to the model
-                     (wire to a stop / session-end hook)
+  session-start   -> record a per-session timestamp sentinel; --prompt lets it
+                     detect memory-intent keywords (sticky for the session)
+  seal-reminder   -> only if this session ever showed memory intent AND no
+                     checkpoint was written since session start, emit a
+                     reminder and exit 2 so the harness feeds it back to the
+                     model (wire to a stop / session-end hook). Silent no-op
+                     otherwise — most sessions never get nagged.
 
 Everything here is local and cheap; no model calls.
 """
@@ -26,11 +29,25 @@ import memory
 
 STATE_DIR = os.path.join(tempfile.gettempdir(), "agent_memory_sessions")
 
+# Only nag to seal work if the session ever looked like it cared about memory.
+# Sticky: once any prompt matches, the reminder stays armed for the rest of
+# the session, even if a later prompt in the same session doesn't mention it.
+MEMORY_INTENT_KEYWORDS = [
+    "continue", "resume", "pick up where", "checkpoint", "hand off", "handoff",
+    "remember", "recall", "prior work", "previous session", "memory", "seal",
+    "上次", "之前", "繼續", "接續", "交接", "記得", "記憶", "保存", "存下來", "存起來",
+]
+
 
 def _sentinel(session_id: str) -> str:
     os.makedirs(STATE_DIR, exist_ok=True)
     safe = "".join(c for c in session_id if c.isalnum() or c in "-_")[:64] or "default"
     return os.path.join(STATE_DIR, safe)
+
+
+def _mentions_memory(prompt: str) -> bool:
+    low = (prompt or "").lower()
+    return any(kw.lower() in low for kw in MEMORY_INTENT_KEYWORDS)
 
 
 def cmd_init(args):
@@ -57,17 +74,29 @@ def cmd_find(args):
 
 def cmd_session_start(args):
     # Create-if-absent: safe to call on every prompt without resetting the
-    # session window or the one-shot reminder flag.
+    # session window or the one-shot reminder flag. `--prompt`, when given,
+    # only ever turns memory_intent on (sticky) — it never turns it back off.
     path = _sentinel(args.session_id)
+    intent = _mentions_memory(getattr(args, "prompt", None))
     if os.path.exists(path):
+        if intent:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    state = json.load(f)
+            except Exception:
+                return
+            if not state.get("memory_intent"):
+                state["memory_intent"] = True
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(state, f)
         return
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"start": memory._now(), "reminded": False}, f)
+        json.dump({"start": memory._now(), "reminded": False, "memory_intent": intent}, f)
 
 
 def cmd_seal_reminder(args):
     path = _sentinel(args.session_id)
-    state = {"start": "", "reminded": False}
+    state = {"start": "", "reminded": False, "memory_intent": False}
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as f:
@@ -76,14 +105,20 @@ def cmd_seal_reminder(args):
             pass
     if state.get("reminded"):
         return  # fire at most once per session, never loop
+    if not state.get("memory_intent"):
+        return  # this session never signaled it cared about memory; don't nag
 
     since = state.get("start") or ""
-    conn = memory.connect()
-    row = conn.execute(
-        "SELECT COUNT(*) AS c FROM checkpoints WHERE created_at >= ?", (since,)
-    ).fetchone()
-    conn.close()
-    if row["c"] == 0:
+    if os.path.exists(memory.DB_PATH):
+        conn = memory.connect()
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM checkpoints WHERE created_at >= ?", (since,)
+        ).fetchone()
+        conn.close()
+        count = row["c"]
+    else:
+        count = 0  # nothing has ever been saved here; never create the db to check
+    if count == 0:
         state["reminded"] = True
         try:
             with open(path, "w", encoding="utf-8") as f:
@@ -116,7 +151,8 @@ def main():
     s = sub.add_parser("find"); s.add_argument("query"); s.add_argument("--tags", default="")
     s.add_argument("--limit", type=int, default=5); s.set_defaults(fn=cmd_find)
 
-    s = sub.add_parser("session-start"); s.add_argument("session_id"); s.set_defaults(fn=cmd_session_start)
+    s = sub.add_parser("session-start"); s.add_argument("session_id")
+    s.add_argument("--prompt", default=None); s.set_defaults(fn=cmd_session_start)
 
     s = sub.add_parser("seal-reminder"); s.add_argument("session_id"); s.set_defaults(fn=cmd_seal_reminder)
 

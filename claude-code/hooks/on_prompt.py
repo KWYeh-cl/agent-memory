@@ -17,8 +17,9 @@ except Exception:
 prompt = data.get("prompt", "")
 sid = data.get("session_id", "default")
 
-# ensure the session sentinel exists even if SessionStart hook isn't configured
-subprocess.run([sys.executable, os.path.join(CORE, "mem_cli.py"), "session-start", sid])
+# ensure the session sentinel exists even if SessionStart hook isn't configured;
+# --prompt lets it arm the (opt-in) seal reminder if this prompt mentions memory
+subprocess.run([sys.executable, os.path.join(CORE, "mem_cli.py"), "session-start", sid, "--prompt", prompt])
 
 r = subprocess.run(
     [sys.executable, os.path.join(CORE, "mem_cli.py"), "find", prompt, "--limit", "5"],

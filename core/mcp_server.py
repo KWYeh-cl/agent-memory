@@ -22,25 +22,36 @@ from pydantic import BaseModel, ConfigDict, Field
 import memory
 
 mcp = FastMCP("agent_memory_mcp")
-memory.init_db()  # idempotent; creates the db/tables on first run
+# No init_db() here: the store is created lazily by memory_save_checkpoint, the
+# first time a session actually decides to persist something (see memory.py).
 
 
 # ---- input models ----------------------------------------------------------
+DB_PATH_DESC = (
+    "Absolute path to this project's memory db. Omit to use AGENT_MEMORY_DB or "
+    "a cwd-relative 'agent_memory.db' (the server's own cwd, which may not be "
+    "the project you're in — pass this explicitly to be sure)."
+)
+
+
 class FindInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
     query: str = Field("", description="Free-text describing the task to match against prior work.")
     tags: Optional[List[str]] = Field(default_factory=list, description="Tag filters, e.g. ['auth','migration'].")
     limit: int = Field(5, ge=1, le=20)
+    db_path: Optional[str] = Field(None, description=DB_PATH_DESC)
 
 
 class TaskIdInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
     task_id: str = Field(..., min_length=1)
+    db_path: Optional[str] = Field(None, description=DB_PATH_DESC)
 
 
 class ArtifactInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
     artifact_id: str = Field(..., min_length=1)
+    db_path: Optional[str] = Field(None, description=DB_PATH_DESC)
 
 
 class Decision(BaseModel):
@@ -64,6 +75,7 @@ class SaveInput(BaseModel):
     artifacts: Optional[List[Artifact]] = Field(default_factory=list, description="Large outputs stored out of line, not inline in outcome.")
     tags: Optional[List[str]] = Field(default_factory=list)
     status: str = Field("in_progress", description="in_progress | done | archived")
+    db_path: Optional[str] = Field(None, description=DB_PATH_DESC)
 
 
 class LinkInput(BaseModel):
@@ -72,6 +84,7 @@ class LinkInput(BaseModel):
     to_task: str
     relation: str = Field(..., description="depends_on | supersedes | derived_from | blocks | relates_to")
     note: str = ""
+    db_path: Optional[str] = Field(None, description=DB_PATH_DESC)
 
 
 # ---- tools -----------------------------------------------------------------
@@ -83,7 +96,9 @@ def memory_find_related_tasks(params: FindInput) -> dict:
     """Search prior tasks for relevant past work BEFORE starting. Returns light
     records (title, one-line summary, tags) only — never checkpoint or document
     bodies. Call at the start of a task to check for similar prior work."""
-    return {"results": memory.find_related_tasks(params.query, params.tags, params.limit)}
+    return {"results": memory.find_related_tasks(
+        params.query, params.tags, params.limit, db_path=params.db_path or memory.DB_PATH,
+    )}
 
 
 @mcp.tool(
@@ -94,7 +109,7 @@ def memory_get_task_detail(params: TaskIdInput) -> dict:
     """Load a prior task's rolling summary, all checkpoints (outcomes, decisions,
     open items) and artifact POINTERS (id + description only). Call only after
     find_related_tasks surfaces a task that looks relevant."""
-    detail = memory.get_task_detail(params.task_id)
+    detail = memory.get_task_detail(params.task_id, db_path=params.db_path or memory.DB_PATH)
     return detail or {"error": f"no task {params.task_id}"}
 
 
@@ -106,7 +121,7 @@ def memory_get_artifact(params: ArtifactInput) -> dict:
     """Load the FULL body of one large artifact by id. This is the only path that
     pulls heavy content into context, so call it only when a specific artifact
     (seen as a pointer in get_task_detail) is actually needed for this step."""
-    art = memory.get_artifact(params.artifact_id)
+    art = memory.get_artifact(params.artifact_id, db_path=params.db_path or memory.DB_PATH)
     return art or {"error": f"no artifact {params.artifact_id}"}
 
 
@@ -127,6 +142,7 @@ def memory_save_checkpoint(params: SaveInput) -> dict:
         open_items=params.open_items or [],
         artifacts=[a.model_dump() for a in (params.artifacts or [])],
         tags=params.tags or [], status=params.status,
+        db_path=params.db_path or memory.DB_PATH,
     )
 
 
@@ -138,7 +154,10 @@ def memory_link_tasks(params: LinkInput) -> dict:
     """Record a STABLE relationship between two tasks (depends_on / supersedes /
     derived_from / blocks). Do NOT use for mere topical similarity — that is found
     automatically by find_related_tasks."""
-    return memory.link_tasks(params.from_task, params.to_task, params.relation, params.note)
+    return memory.link_tasks(
+        params.from_task, params.to_task, params.relation, params.note,
+        db_path=params.db_path or memory.DB_PATH,
+    )
 
 
 if __name__ == "__main__":
