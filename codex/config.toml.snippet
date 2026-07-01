@@ -5,11 +5,14 @@
 # ============================================================================
 
 # --- MCP server (the in-session tool surface; same server as Claude Code) ----
-# Confirmed format: Codex reads [mcp_servers.<name>] from config.toml.
 [mcp_servers.agent-memory]
 command = "python3"
 args = ["REPLACE_WITH_ABS_PATH/agent-memory/core/mcp_server.py"]
-env = { AGENT_MEMORY_DB = "REPLACE_WITH_ABS_PATH/agent-memory/agent_memory.db" }
+# No env block: the memory store is per-project and lazy (created only on the
+# first memory_save_checkpoint call, at a cwd-relative agent_memory.db). Do
+# NOT set AGENT_MEMORY_DB here — that would force every project onto one
+# shared file. If a session needs a non-default location, pass db_path on the
+# individual memory_* tool calls instead.
 # List tools in-session with /mcp once Codex restarts.
 
 # --- Skill (portable) --------------------------------------------------------
@@ -18,33 +21,34 @@ env = { AGENT_MEMORY_DB = "REPLACE_WITH_ABS_PATH/agent-memory/agent_memory.db" }
 # No config needed; Codex auto-discovers it. Restart Codex if it doesn't appear.
 
 # --- Hooks (deterministic layer) --------------------------------------------
-# Codex supports command hooks, but the exact event identifiers/fields differ
-# from Claude Code and have been changing. VERIFY the current event names and
-# schema against the Codex "Hooks" doc (developers.openai.com/codex) before
-# relying on this — the block below is the intended SHAPE, not guaranteed keys.
+# Verified against developers.openai.com/codex/hooks: hook commands receive a
+# JSON object on stdin (session_id, turn_id, and prompt for UserPromptSubmit),
+# and registration uses nested table arrays per event — not a flat [[hooks]]
+# list with event="..." and {{template}} substitution (an earlier, incorrect
+# version of this snippet used that shape; don't reuse it).
 #
-# What each hook must call (same CLI as Claude Code uses):
-#   on prompt submit -> python3 REPLACE_WITH_ABS_PATH/agent-memory/core/mem_cli.py find "<prompt>"
-#                       (its stdout should be injected into context)
-#   on session start -> python3 .../mem_cli.py session-start "<session_id>"
-#   on turn/stop     -> python3 .../mem_cli.py seal-reminder "<session_id>"
-#                       (non-zero exit should surface the reminder to the model)
-#
-# Example skeleton (adjust event names + how the prompt/session id are passed):
-#
-# [[hooks]]
-# event = "user_prompt_submit"   # <-- verify the real event name
-# command = ["python3", "REPLACE_WITH_ABS_PATH/agent-memory/core/mem_cli.py", "find", "{{prompt}}"]
-#
-# [[hooks]]
-# event = "session_start"        # <-- verify
-# command = ["python3", "REPLACE_WITH_ABS_PATH/agent-memory/core/mem_cli.py", "session-start", "{{session_id}}"]
-#
-# [[hooks]]
-# event = "turn_end"             # <-- verify (Stop/SessionEnd equivalent)
-# command = ["python3", "REPLACE_WITH_ABS_PATH/agent-memory/core/mem_cli.py", "seal-reminder", "{{session_id}}"]
-#
-# If Codex's hook events can't inject context or block the turn the way you need,
-# the MCP tools + skill + AGENTS.md still give you the full workflow — you just
-# lose the *deterministic* guarantee on the opening query and the seal, which
-# then rely on the model following the protocol (advisory, like any prompt rule).
+# Each entry below points at codex/hooks/*.py, thin wrappers that read that
+# same stdin JSON and delegate into the shared claude-code/hooks/*.py logic
+# (so there's exactly one implementation of the opening query and the seal).
+
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "python3 REPLACE_WITH_ABS_PATH/agent-memory/codex/hooks/on_session_start.py"
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "python3 REPLACE_WITH_ABS_PATH/agent-memory/codex/hooks/on_prompt.py"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "python3 REPLACE_WITH_ABS_PATH/agent-memory/codex/hooks/on_stop.py"
+
+# If Codex's hook events change shape again in a future release, re-verify
+# against the Hooks doc before trusting this snippet. Until then, the MCP
+# tools + skill + AGENTS.md still give you the full workflow on their own —
+# without hooks you just lose the *deterministic* guarantee on the opening
+# query and the seal, which then rely on the model following the protocol
+# (advisory, like any prompt rule).
