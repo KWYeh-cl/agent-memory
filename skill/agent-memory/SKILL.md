@@ -25,10 +25,13 @@ Every tool takes an optional `db_path`. Default is a cwd-relative `agent_memory.
 (one store per project); pass `db_path` explicitly if you need a different file.
 
 ## Starting a task
-A prompt-submit hook usually injects a `<related_prior_tasks>` block already. If
-it's present and anything looks relevant, call `memory_get_task_detail` on it and
-reuse its decisions instead of redoing the work. If no block appears, and the
-task plausibly resembles past work, call `memory_find_related_tasks` yourself.
+A prompt-submit hook injects a `<related_prior_tasks>` block, but only when the
+current prompt itself shows memory intent (continue, resume, checkpoint, 之前,
+記得, etc.) — plain task prompts don't trigger it. If the block is present and
+anything looks relevant, call `memory_get_task_detail` on it and reuse its
+decisions instead of redoing the work. If no block appears but the task
+plausibly resembles past work anyway, call `memory_find_related_tasks`
+yourself — don't assume "no block" means "no prior work exists."
 Pull a large artifact with `memory_get_artifact` only when its description shows
 it's needed for the current step — never bulk-load artifacts.
 

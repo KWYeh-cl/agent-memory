@@ -139,13 +139,17 @@ shows `agent-memory`.
 
 1. **Tools reachable:** in the CLI, confirm `memory_find_related_tasks` and
    `memory_save_checkpoint` appear in the tool/`/mcp` listing.
-2. **Opening query injects, and creates nothing (Claude Code):** in a project
-   with no prior memory, start a task; confirm no `<related_prior_tasks>` block
-   appears, and confirm no db file was created:
+2. **Opening query is gated on memory intent, and creates nothing (Claude
+   Code):** the `UserPromptSubmit` hook only calls `find` when the CURRENT
+   prompt itself shows memory intent (continue/resume/checkpoint/之前/記得/
+   etc.) — a plain task prompt should never trigger it. Confirm both halves:
    ```bash
    cd <some project dir>
-   python3 ROOT/core/mem_cli.py find "test"   # prints nothing
-   ls agent_memory.db                          # must fail — nothing created
+   echo '{"session_id":"t1","prompt":"fix this typo"}' \
+     | python3 ROOT/claude-code/hooks/on_prompt.py    # prints nothing (no keyword)
+   echo '{"session_id":"t2","prompt":"continue where we left off"}' \
+     | python3 ROOT/claude-code/hooks/on_prompt.py    # runs find (prints nothing if no prior tasks)
+   ls agent_memory.db                                  # must fail — nothing created either way
    ```
 3. **Seal reminder is gated on memory intent (Claude Code):** a prompt with no
    memory-intent keywords (e.g. "fix this typo"), ended without calling
@@ -155,9 +159,11 @@ shows `agent-memory`.
    design, and must not create a db file if none exists yet.)
 4. **Round-trip:** ask the model to save a checkpoint for a dummy task (this
    creates `<project>/agent_memory.db`), then in a fresh session in the *same*
-   project directory ask about the same topic; confirm the prior task surfaces
-   and its detail loads via `memory_get_task_detail`. Confirm a *different*
-   project directory does NOT see it (per-project isolation).
+   project directory ask about the same topic **using a prompt that itself
+   shows memory intent** (e.g. "continue the <topic> work from before") —
+   a plain restatement of the topic won't trigger the hook. Confirm the prior
+   task surfaces and its detail loads via `memory_get_task_detail`. Confirm a
+   *different* project directory does NOT see it (per-project isolation).
 
 Report which checks passed. If 2 or 3 didn't fire, the hooks aren't wired —
 re-check the paths in `settings.json` and that `python3` resolves.

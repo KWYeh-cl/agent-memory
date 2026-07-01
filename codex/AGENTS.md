@@ -8,8 +8,10 @@ and created lazily — nothing is written anywhere until the first
 a cwd-relative `agent_memory.db`; every `memory_*` tool also accepts an optional
 `db_path` to target a specific file explicitly instead.
 
-- Before non-trivial work: reuse prior tasks. If a `<related_prior_tasks>` block
-  is present, load relevant ones with `memory_get_task_detail`; otherwise call
+- Before non-trivial work: reuse prior tasks. A `<related_prior_tasks>` block is
+  only injected when the current prompt itself shows memory intent
+  (continue/resume/checkpoint/記得/之前/etc.) — not on every prompt. If it's
+  present, load relevant ones with `memory_get_task_detail`; otherwise call
   `memory_find_related_tasks` yourself when the task resembles past work.
 - When handing off or finishing: seal the work with `memory_save_checkpoint`
   (rolling summary, outcome, decisions + reasons, open items, large outputs as

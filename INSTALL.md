@@ -38,16 +38,18 @@ folder. `python3` must be on PATH for the hooks; use a full interpreter path if 
 3. **Hooks** — merge `claude-code/settings.json` into `.claude/settings.json`
    (project) or `~/.claude/settings.json`, fixing the three paths. These wire:
    - `SessionStart` → records the session sentinel
-   - `UserPromptSubmit` → injects `<related_prior_tasks>` (forced opening query,
-     always runs; no-op and creates nothing if this project has no memory yet)
+   - `UserPromptSubmit` → injects `<related_prior_tasks>`, but only when the
+     current prompt itself shows memory intent (continue/resume/checkpoint/
+     之前/記得/etc.) — a plain task prompt never triggers the search, and it
+     creates nothing if this project has no memory yet
    - `Stop` → reminds to seal, but only if some prompt this session showed
-     memory intent (continue/resume/checkpoint/之前/記得/etc.) **and** nothing
-     was checkpointed yet (fires once)
+     memory intent **and** nothing was checkpointed yet (fires once)
 4. **Always-on rules** — copy `claude-code/CLAUDE.md` into your project `CLAUDE.md`
    (or append its contents).
-5. Restart Claude Code. Verify: `/mcp` lists `agent-memory`; type a task and the
-   model should see prior tasks (once any exist in this project); say something
-   like "continue this later" and finish without sealing — the Stop hook nudges.
+5. Restart Claude Code. Verify: `/mcp` lists `agent-memory`; say something like
+   "continue where we left off" and the model should see prior tasks (once any
+   exist in this project — a plain task prompt won't trigger the search); say
+   it again and finish without sealing — the Stop hook nudges.
 
 ---
 
@@ -80,7 +82,7 @@ folder. `python3` must be on PATH for the hooks; use a full interpreter path if 
 |------|-------------|-------|
 | In-session tools (find / detail / artifact / save / link) | MCP — works | MCP — works |
 | Protocol (when/how to use them) | skill + CLAUDE.md — advisory | skill + AGENTS.md — advisory |
-| Opening query injection (always runs, every prompt) | UserPromptSubmit hook — **deterministic** | hook (verify) or advisory |
+| Opening query injection (only when the prompt shows memory intent) | UserPromptSubmit hook — **deterministic** | hook (verify) or advisory |
 | Seal-on-handoff reminder (only if session showed memory intent) | Stop hook — **deterministic** (once/session) | hook (verify) or advisory |
 
 The MCP server and skill are fully portable and identical across both. The hooks
