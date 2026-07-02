@@ -125,20 +125,26 @@ sequenceDiagram
 
 ### 安裝設定
 
-**推薦做法——交給 agent 執行：** 在 Claude Code 或 Codex 中開啟這個資料夾，
-然後說
+**一行安裝（推薦）：** clone 之後跑
 
-> "set up agent-memory by following SETUP_RUNBOOK.md"
+```bash
+./install.sh            # 接上 Claude Code（使用者全域 ~/.claude）
+./install.sh --codex    # 連 Codex 一起接（~/.codex）
+```
 
-這份 runbook 會讓 agent 蒐集你的路徑資訊、把共用的 `core/` 程式碼與 skill
-安裝到全域（但資料庫不會——那會維持以專案為單位、延遲建立），接上 MCP
-server 與 hooks，並在每一步驗證結果——在動到任何 config 檔案之前都會先跟你
-確認。
+它會安裝依賴套件，然後把 MCP server、hooks、skill、以及常駐規則一次全部接
+好——所有路徑都從這個 repo 自己的位置推導出來，沒有 placeholder 要填。這個
+動作是**冪等的**：重跑會就地更新（用標記／去重保護），不會重複寫入，也不會
+覆蓋你 `settings.json`／`CLAUDE.md` 裡既有的內容（會先備份成 `.bak`）。想裝
+成專案層級而不是全域，加 `--project .`。這裡不會建立任何資料庫——那仍然是依
+專案、在第一次 `memory_save_checkpoint` 時才延遲建立。
 
-**手動安裝：** 見 `INSTALL.md` 裡各工具的詳細步驟。也有 `install.sh` 可以快
-速完成核心安裝——它會安裝依賴套件，並把可直接使用的 config 範本產生到
-`dist/`（不會寫入固定的 `AGENT_MEMORY_DB`；你得到的仍然是上面描述的、依專案
-延遲建立的設計）。
+底層是 `python3 core/install.py`（`install.sh` 只是先幫你裝依賴再呼叫它）；
+想跳過 pip 步驟可以直接跑它。
+
+**交給 agent 執行：** 也可以在 Claude Code / Codex 中開啟這個資料夾，說
+"set up agent-memory by following SETUP_RUNBOOK.md"，agent 會照 runbook 一步
+步確認後安裝。**手動安裝：** 見 `INSTALL.md`。
 
 ## 資料模型
 
@@ -153,13 +159,14 @@ tasks_fts      標題 + 摘要的 FTS5 索引
 ## 檔案結構
 
 ```
-core/        schema.sql, memory.py, mcp_server.py, mem_cli.py, requirements.txt
+core/        schema.sql, memory.py, mcp_server.py, mem_cli.py, install.py, requirements.txt
 skill/       agent-memory/SKILL.md          （可通用於兩種工具）
 claude-code/ .mcp.json, settings.json, CLAUDE.md, hooks/
 codex/       config.toml.snippet, AGENTS.md, hooks/
-install.sh           一次性、自動處理路徑的安裝腳本（依賴套件 + 產生 config）
-SETUP_RUNBOOK.md     可由 agent 直接執行的安裝指南（推薦）
-INSTALL.md           手動、依工具區分的安裝步驟
+install.sh           一行安裝：裝依賴 + 呼叫 core/install.py 自動接好所有配線
+core/install.py      實際的自我配線器（冪等、就地合併、會備份既有設定）
+SETUP_RUNBOOK.md     可由 agent 直接執行的安裝指南
+INSTALL.md           手動、依工具區分的安裝步驟（fallback）
 ```
 
 ## 需求環境

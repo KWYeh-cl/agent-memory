@@ -1,5 +1,27 @@
 # Install
 
+## Quick start (one command)
+
+Clone the repo, then:
+
+```bash
+./install.sh            # Claude Code, user-global (~/.claude)
+./install.sh --codex    # also wire Codex (~/.codex)
+./install.sh --project .   # project scope: ./.claude (+ ./.codex) instead of home
+```
+
+It installs deps and wires the **MCP server + hooks + skill + always-on rules**
+in one shot, resolving every path from this repo — no placeholders to fill.
+Idempotent (re-run to update in place; existing `settings.json`/`CLAUDE.md`
+content is preserved and backed up to `.bak`). It creates **no** DB — the store
+stays per-project and lazy. Under the hood it's `python3 core/install.py`; run
+that directly to skip the pip step. Restart your CLI and verify with `/mcp`.
+
+The manual, per-tool steps below are a fallback if you want to wire things by
+hand or understand exactly what the installer touches.
+
+---
+
 Same core for both tools. You install three things: the **MCP server** (in-session
 tools), the **skill** (the protocol), and the **hooks** (the deterministic
 opening-query + seal). Only the wiring differs per tool.
