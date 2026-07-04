@@ -15,11 +15,21 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PY="$(command -v python3 || true)"
-[ -z "$PY" ] && { echo "python3 not found on PATH"; exit 1; }
+
+if command -v python3 >/dev/null 2>&1; then
+  PY=(python3)
+elif command -v python >/dev/null 2>&1; then
+  PY=(python)
+elif command -v py >/dev/null 2>&1; then
+  PY=(py -3)
+else
+  echo "python3/python/py not found on PATH"
+  exit 1
+fi
 
 echo "==> installing deps"
-"$PY" -m pip install -r "$ROOT/core/requirements.txt"
+"${PY[@]}" -m ensurepip --upgrade >/dev/null 2>&1 || true
+"${PY[@]}" -m pip install -r "$ROOT/core/requirements.txt"
 
 echo "==> wiring config"
-exec "$PY" "$ROOT/core/install.py" "$@"
+exec "${PY[@]}" "$ROOT/core/install.py" "$@"
