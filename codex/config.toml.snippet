@@ -8,11 +8,15 @@
 [mcp_servers.agent-memory]
 command = "python3"
 args = ["REPLACE_WITH_ABS_PATH/agent-memory/core/mcp_server.py"]
-# No env block: the memory store is per-project and lazy (created only on the
-# first memory_save_checkpoint call, at a cwd-relative agent_memory.db). Do
-# NOT set AGENT_MEMORY_DB here — that would force every project onto one
-# shared file. If a session needs a non-default location, pass db_path on the
-# individual memory_* tool calls instead.
+# VibeFlow uses one User Data DB across every task, project, and worktree.
+# Replace this with the current user's VibeFlow User Data directory; for
+# example, /Users/you/Library/Application Support/vibeflow/agent_memory.db.
+# Never use a worktree path here: Python MCP otherwise falls back to its cwd
+# and creates a separate database for that worktree.
+[mcp_servers.agent-memory.env]
+AGENT_MEMORY_DB = "REPLACE_WITH_VIBEFLOW_USER_DATA_PATH/agent_memory.db"
+# Pass db_path on an individual memory_* tool call only for an explicit,
+# intentional override of this shared store.
 # List tools in-session with /mcp once Codex restarts.
 
 # --- Skill (portable) --------------------------------------------------------
@@ -27,24 +31,24 @@ args = ["REPLACE_WITH_ABS_PATH/agent-memory/core/mcp_server.py"]
 # list with event="..." and {{template}} substitution (an earlier, incorrect
 # version of this snippet used that shape; don't reuse it).
 #
-# Each entry below points at codex/hooks/*.py, thin wrappers that read that
-# same stdin JSON and delegate into the shared claude-code/hooks/*.py logic
-# (so there's exactly one implementation of the opening query and the seal).
+# Each entry below sets the same User Data DB before invoking codex/hooks/*.py,
+# which delegate into the shared claude-code/hooks/*.py logic. MCP server env
+# does not propagate to hooks, so keep these paths aligned.
 
 [[hooks.SessionStart]]
 [[hooks.SessionStart.hooks]]
 type = "command"
-command = "python3 REPLACE_WITH_ABS_PATH/agent-memory/codex/hooks/on_session_start.py"
+command = "AGENT_MEMORY_DB='REPLACE_WITH_VIBEFLOW_USER_DATA_PATH/agent_memory.db' python3 REPLACE_WITH_ABS_PATH/agent-memory/codex/hooks/on_session_start.py"
 
 [[hooks.UserPromptSubmit]]
 [[hooks.UserPromptSubmit.hooks]]
 type = "command"
-command = "python3 REPLACE_WITH_ABS_PATH/agent-memory/codex/hooks/on_prompt.py"
+command = "AGENT_MEMORY_DB='REPLACE_WITH_VIBEFLOW_USER_DATA_PATH/agent_memory.db' python3 REPLACE_WITH_ABS_PATH/agent-memory/codex/hooks/on_prompt.py"
 
 [[hooks.Stop]]
 [[hooks.Stop.hooks]]
 type = "command"
-command = "python3 REPLACE_WITH_ABS_PATH/agent-memory/codex/hooks/on_stop.py"
+command = "AGENT_MEMORY_DB='REPLACE_WITH_VIBEFLOW_USER_DATA_PATH/agent_memory.db' python3 REPLACE_WITH_ABS_PATH/agent-memory/codex/hooks/on_stop.py"
 
 # If Codex's hook events change shape again in a future release, re-verify
 # against the Hooks doc before trusting this snippet. Until then, the MCP

@@ -3,7 +3,7 @@
 ## 關於此專案
 
 `agent-memory` 為程式碼代理（Claude Code、Codex CLI）提供一個持久化、
-**以專案為單位**的**任務記憶**：一個本機 SQLite 儲存區，搭配 MCP 工具、hooks
+**由 VibeFlow 跨專案統一管理**的**任務記憶**：一個本機 SQLite 儲存區，搭配 MCP 工具、hooks
 與一個 skill，讓代理能在任務開始時檢查「這件事我是不是做過？」，並在結束時
 留下一份乾淨的交接紀錄——而且不需要仰賴模型「記得要這麼做」。
 
@@ -41,12 +41,20 @@
   這個判斷本身是決定性的關鍵字比對，不是靠模型「想到要問」。提示（prompt）
   只是建議；hook 則一定會執行。
 
-**以專案為單位、延遲建立。** 這裡沒有全域共用的資料庫。儲存區位於相對於當前
-工作目錄的 `agent_memory.db`（每個專案各一份），且只有在某個 session 真正呼
-叫 `memory_save_checkpoint` 時才會第一次被建立——純讀取的查詢永遠不會建立檔
-案，在某個 session 判斷「這裡有值得保留的東西」之前，什麼都不會被寫入任何
-地方。每個 MCP 工具也都接受一個可選的 `db_path`，供 session 需要時指定明確
-的檔案路徑。
+**VibeFlow 統一資料庫、延遲建立。** VibeFlow 的所有 task、project 與 worktree
+共用一個位於 VibeFlow User Data 的 `agent_memory.db`；跨使用者時請替換 User Data
+根目錄，例如 macOS 可為
+`/Users/you/Library/Application Support/vibeflow/agent_memory.db`。只有某個 session
+真正呼叫 `memory_save_checkpoint` 時才會第一次建立——純讀取的查詢永遠不會建立
+檔案。每個 MCP 工具仍接受可選的 `db_path`，但僅用於刻意覆蓋這個統一位置。
+
+**Claude 與 Codex 的接線差異。** VibeFlow 每次啟動 Claude，都用
+`--mcp-config` 在執行期注入內建 MCP server，並傳入
+`--db <VibeFlow User Data>/agent_memory.db`，所以 Claude 會正確寫入統一資料庫；
+這不是 Claude CLI 本機全域設定。Codex 沒有這個 launch-time injection，使用
+Python MCP server 時必須在 server `env` 設定
+`AGENT_MEMORY_DB=<VibeFlow User Data>/agent_memory.db`。未設定時 Python server 會
+回退到 cwd-relative `agent_memory.db`，因而可能在 worktree 產生錯誤的資料庫。
 
 **設計上就精簡 token 用量。** `memory_find_related_tasks` 只回傳輕量欄位
 （標題、一行摘要、標籤）——絕不包含 checkpoint 或 artifact 的完整內容。
@@ -94,7 +102,7 @@ sequenceDiagram
     participant Hk as Hooks（保證層）
     participant Ag as Agent（判斷層）
     participant Mc as MCP 工具（正確性層）
-    participant DB as SQLite 儲存區（依專案、延遲建立）
+    participant DB as SQLite 儲存區（VibeFlow User Data、延遲建立）
 
     U->>Ag: 開始一個任務（任意提問）
     Hk->>Hk: 這次提問本身有沒有顯示記憶意圖？
@@ -116,7 +124,7 @@ sequenceDiagram
 
 - 想接續先前的工作時，直接在提問裡帶出這個意圖（*continue*、*hand off*、
   *pick up where we left off*、*checkpoint*、*resume*、之前、記得、接續
-  等）——如果這個*專案*裡已經有相關的先前工作，就會自動出現在 context 裡。
+  等）——如果統一資料庫裡已經有相關的先前工作，就會自動出現在 context 裡。
   單純描述一個新任務，不會觸發這個搜尋，也不需要觸發。
 - 照常完成或交接工作。如果這份工作有實質內容，代理應該會自行判斷去封存；如
   果它忘了，而對話又顯示出「之後要接續」的意圖，就會收到一次提醒。
@@ -136,8 +144,13 @@ sequenceDiagram
 好——所有路徑都從這個 repo 自己的位置推導出來，沒有 placeholder 要填。這個
 動作是**冪等的**：重跑會就地更新（用標記／去重保護），不會重複寫入，也不會
 覆蓋你 `settings.json`／`CLAUDE.md` 裡既有的內容（會先備份成 `.bak`）。想裝
-成專案層級而不是全域，加 `--project .`。這裡不會建立任何資料庫——那仍然是依
-專案、在第一次 `memory_save_checkpoint` 時才延遲建立。
+成專案層級而不是全域，加 `--project .`。這裡不會建立任何資料庫——VibeFlow 的
+統一資料庫仍在第一次 `memory_save_checkpoint` 時才延遲建立。
+若同時安裝 Codex，安裝器會把 `AGENT_MEMORY_DB` 寫入其 MCP 設定；預設路徑是
+`~/Library/Application Support/vibeflow/agent_memory.db`，可透過
+`./install.sh --codex --db-path "<VibeFlow User Data>/agent_memory.db"` 覆蓋。
+更新既有 user-scope Claude `agent-memory` server 時，安裝器會先保留
+`~/.claude.json.bak`；新增失敗會復原該備份並以非零狀態結束。
 
 底層是 `python3 core/install.py`（`install.sh` 只是先幫你裝依賴再呼叫它）；
 想跳過 pip 步驟可以直接跑它。

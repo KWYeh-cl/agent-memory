@@ -1,12 +1,14 @@
 # Memory protocol (always on)
 
 This project uses a persistent task-memory store via the `agent-memory` MCP
-server (`memory_*` tools) and the `agent-memory` skill. The store is per-project
-and created lazily — nothing is written anywhere until the first
-`memory_save_checkpoint` call; read-only tools return empty results (no
-`<related_prior_tasks>` block) until then, and never create a file. Defaults to
-a cwd-relative `agent_memory.db`; every `memory_*` tool also accepts an optional
-`db_path` to target a specific file explicitly instead.
+server (`memory_*` tools) and the `agent-memory` skill. The store is shared by
+VibeFlow across all tasks, projects, and worktrees. VibeFlow
+launches Claude with an inline `--mcp-config` for its built-in server and passes
+`--db <VibeFlow User Data>/agent_memory.db` (for example,
+`/Users/you/Library/Application Support/vibeflow/agent_memory.db`). Nothing is
+written until the first `memory_save_checkpoint`; read-only tools return empty
+results (no `<related_prior_tasks>` block) until then and never create a file.
+Every `memory_*` tool accepts optional `db_path` only for an explicit override.
 
 - Before non-trivial work: reuse prior tasks. A `<related_prior_tasks>` block is
   injected automatically only when the current prompt itself shows memory

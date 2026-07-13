@@ -19,14 +19,13 @@ in place, and the verification in Phase D passes.
    (`<file>.bak`) and merge the new keys in. Never clobber an existing
    `settings.json`/`config.toml`/`CLAUDE.md`. Never overwrite an existing
    `agent_memory.db` or an existing `skill/agent-memory/`.
-3. **No global `AGENT_MEMORY_DB`.** Do not set it in the MCP server `env`, in
-   any hook command, or anywhere in `ROOT/`. Memory is per-project and lazy —
-   leave the default (cwd-relative `agent_memory.db`) so each project gets its
-   own store, created only when that project's first `memory_save_checkpoint`
-   fires. Pinning a global path recreates the old bug: a stray DB wherever the
-   CLI happens to launch from. If one project genuinely needs a non-default
-   location, that's a `db_path` argument on the MCP tool calls (or that
-   project's own `.claude/settings.json`/`.mcp.json`), never a global setting.
+3. **Use VibeFlow's one User Data database.** Set Codex's MCP server `env`
+   `AGENT_MEMORY_DB` to `<VibeFlow User Data>/agent_memory.db`, never to a
+   worktree path. VibeFlow supplies that same path to Claude at launch time, so
+   do not fabricate a Claude CLI global setting. A worktree path (or no Codex
+   environment variable) makes the Python server fall back to cwd and creates
+   an unintended database. Use a `db_path` tool argument only for an explicit
+   per-call override.
 4. **No secrets in any file.** These configs hold paths only.
 5. **Idempotent.** Re-running this runbook must not duplicate hooks, re-init the
    DB, or double-register the server. Check before you add.
@@ -48,6 +47,12 @@ Ask, in one message:
 3. **Scope**: this project only, or all projects (user-global)?
    - Claude Code: project = `.claude/` in the repo; global = `~/.claude/`.
    - Codex: project = `<repo>/.codex/` + `.agents/skills/`; global = `~/.codex/`.
+4. The current user's **VibeFlow User Data directory**. Use its
+   `agent_memory.db` for both CLIs, e.g.
+   `/Users/you/Library/Application Support/vibeflow/agent_memory.db`.
+   The installer default is this packaged macOS location; VibeFlow development
+   uses `~/Library/Application Support/vibeflow (development)/agent_memory.db`,
+   which must be passed explicitly through `--db-path`.
 
 Resolve the Python interpreter: run `which python3`. If hooks may run in an
 environment without `python3` on PATH, use the absolute interpreter path in all
@@ -63,18 +68,15 @@ python3 -m pip install -r requirements.txt
 ```
 
 No DB is created in this phase, and none should be — `ROOT/` holds shared
-scripts only. Memory itself is per-project and lazy: nothing is written
-anywhere until a session's first `memory_save_checkpoint` call, at which point
-it lands at a cwd-relative `agent_memory.db` in *that project*, not `ROOT`. Do
-not set a global `AGENT_MEMORY_DB` anywhere in this setup — that would defeat
-per-project isolation and risks creating a stray DB wherever a CLI happens to
-be launched from (e.g. the user's home directory). Every `memory_*` MCP tool
-also accepts an explicit `db_path` if a session needs to target a specific
-file instead of the cwd default.
+scripts only. VibeFlow owns one lazy database at
+`<VibeFlow User Data>/agent_memory.db`, shared by every task, project, and
+worktree. It is written only on the first `memory_save_checkpoint`; pure reads
+do not create it. Every `memory_*` MCP tool accepts explicit `db_path` for an
+intentional per-call override, not as a replacement for the shared default.
 
 **Check:** `python3 mem_cli.py find "setup smoke test"` runs without error and
-prints nothing (no prior work, and — importantly — no db file gets created by
-this read-only call: `ls agent_memory.db` should still fail).
+prints nothing (no prior work, and — importantly — no DB file is created by
+this read-only call if the User Data DB does not already exist).
 
 ---
 
@@ -82,7 +84,15 @@ this read-only call: `ls agent_memory.db` should still fail).
 
 For each file, show the diff and confirm before writing.
 
-1. **Register the MCP server** (preferred over hand-editing `.mcp.json`):
+1. **VibeFlow launch injection:** VibeFlow starts Claude with `--mcp-config`
+   that injects its built-in server and passes
+   `--db <VibeFlow User Data>/agent_memory.db`. This is why Claude writes to
+   the right shared database; it is not a Claude CLI persistent global setting.
+   For standalone wiring, the installer supplies the same DB path to both
+   Claude's MCP registration and hook commands through `--db-path`.
+   Do not add a competing server when operating inside VibeFlow. For standalone
+   Claude Code only, register the MCP server (preferred over hand-editing
+   `.mcp.json`):
    ```bash
    claude mcp add agent-memory python3 ROOT/core/mcp_server.py
    ```
@@ -113,8 +123,15 @@ For each file, show the diff and confirm before writing.
 
 1. **MCP server:** merge the `[mcp_servers.agent-memory]` block from
    `codex/config.toml.snippet` (paths fixed) into `~/.codex/config.toml` or the
-   project `.codex/config.toml`. Codex loads project config only when the project
-   is trusted — tell the user if it isn't.
+   project `.codex/config.toml`, replacing
+   `REPLACE_WITH_VIBEFLOW_USER_DATA_PATH` in its `AGENT_MEMORY_DB` environment
+   variable. It must be `<VibeFlow User Data>/agent_memory.db`, never a
+   worktree path. Codex loads project config only when the project is trusted —
+   tell the user if it isn't.
+   If using the installer instead, run `./install.sh --codex --db-path
+   "<VibeFlow User Data>/agent_memory.db"`; omitting `--db-path` uses
+   `~/Library/Application Support/vibeflow/agent_memory.db`. The installer
+   writes this shared path to both Codex MCP and hook commands.
 
 2. **Skill:** copy `skill/agent-memory/` to `.agents/skills/agent-memory/`
    (project) or `~/.codex/skills/agent-memory/` (global). Diff before overwrite.
@@ -149,7 +166,7 @@ shows `agent-memory`.
      | python3 ROOT/claude-code/hooks/on_prompt.py    # prints nothing (no keyword)
    echo '{"session_id":"t2","prompt":"continue where we left off"}' \
      | python3 ROOT/claude-code/hooks/on_prompt.py    # runs find (prints nothing if no prior tasks)
-   ls agent_memory.db                                  # must fail — nothing created either way
+   test -e "<VibeFlow User Data>/agent_memory.db"      # may be absent until the first save
    ```
 3. **Seal reminder is gated on memory intent (Claude Code):** a prompt with no
    memory-intent keywords (e.g. "fix this typo"), ended without calling
@@ -157,13 +174,13 @@ shows `agent-memory`.
    mention intent (e.g. "continue where we left off"), ended the same way,
    must produce the reminder exactly once. (Fires at most once per session by
    design, and must not create a db file if none exists yet.)
-4. **Round-trip:** ask the model to save a checkpoint for a dummy task (this
-   creates `<project>/agent_memory.db`), then in a fresh session in the *same*
-   project directory ask about the same topic **using a prompt that itself
-   shows memory intent** (e.g. "continue the <topic> work from before") —
-   a plain restatement of the topic won't trigger the hook. Confirm the prior
-   task surfaces and its detail loads via `memory_get_task_detail`. Confirm a
-   *different* project directory does NOT see it (per-project isolation).
+4. **Cross-worktree round-trip:** ask the model to save a checkpoint for a
+   dummy task (this creates `<VibeFlow User Data>/agent_memory.db` if absent),
+   then start a fresh session from a *different* worktree or project directory
+   and ask about the same topic **using a prompt that itself shows memory
+   intent** (e.g. "continue the <topic> work from before"). Confirm the prior
+   task surfaces and its detail loads via `memory_get_task_detail`, proving
+   both sessions read the same shared DB.
 
 Report which checks passed. If 2 or 3 didn't fire, the hooks aren't wired —
 re-check the paths in `settings.json` and that `python3` resolves.
@@ -175,14 +192,14 @@ re-check the paths in `settings.json` and that `python3` resolves.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `/mcp` doesn't list the server | wrong path / not restarted | fix abs path in `.mcp.json` or re-run `claude mcp add`; restart |
-| Tools listed but every call errors | missing deps, or calling a task-scoped tool with a `task_id` from a different project's db | `pip install -r core/requirements.txt`; remember each project has its own store |
-| A db file shows up somewhere unexpected | something (script, hook, config) is forcing `AGENT_MEMORY_DB` | grep for `AGENT_MEMORY_DB=` across settings.json/config.toml/hooks — remove it, per operating rule 3 |
+| Tools listed but every call errors | missing deps, or incorrect VibeFlow User Data path | `pip install -r core/requirements.txt`; confirm `AGENT_MEMORY_DB` points to the shared DB |
+| A db file shows up in a worktree | Codex lacks `AGENT_MEMORY_DB` or it points to a worktree | set it in Codex MCP `env` to `<VibeFlow User Data>/agent_memory.db` |
 | Opening query never injects | prompt hook not firing | check `UserPromptSubmit` entry + that the hook is executable + `python3` on PATH |
 | Seal reminder never fires | Stop hook path wrong, or already fired this session | check `Stop` entry; reminder is one-shot per session by design |
 | Skill never triggers | description didn't match | it's advisory; the hooks/MCP still work — invoke `/agent-memory` explicitly if needed |
 
 ## Do NOT
 - Do not enable Codex hooks with unverified event names.
-- Do not set a global `AGENT_MEMORY_DB` anywhere (MCP `env`, hook commands, `ROOT/`).
-- Do not overwrite existing `settings.json` / `config.toml` / `CLAUDE.md` / any project's DB.
+- Do not point `AGENT_MEMORY_DB` at a worktree; Codex must use the VibeFlow User Data DB.
+- Do not overwrite existing `settings.json` / `config.toml` / `CLAUDE.md` / the shared DB.
 - Do not add any credentials or tokens to these files.
