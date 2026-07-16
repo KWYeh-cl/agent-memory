@@ -8,13 +8,12 @@ hooks use this CLI for the two steps that must happen no matter what:
 
   find            -> opening query, printed as an injectable context block
                      (wire to a prompt-submit hook)
-  session-start   -> record a per-session timestamp sentinel; --prompt lets it
-                     detect memory-intent keywords (sticky for the session)
-  seal-reminder   -> only if this session ever showed memory intent AND no
-                     checkpoint was written since session start, emit a
+  session-start   -> record a per-session timestamp sentinel
+  seal-reminder   -> if no checkpoint was written since session start, emit a
                      reminder and exit 2 so the harness feeds it back to the
-                     model (wire to a stop / session-end hook). Silent no-op
-                     otherwise — most sessions never get nagged.
+                     model (wire to a stop / session-end hook). Fires at most
+                     once per session; the reminder itself tells the model to
+                     skip sealing when no substantive work happened.
 
 Everything here is local and cheap; no model calls.
 """
@@ -29,9 +28,8 @@ import memory
 
 STATE_DIR = os.path.join(tempfile.gettempdir(), "agent_memory_sessions")
 
-# Only nag to seal work if the session ever looked like it cared about memory.
-# Sticky: once any prompt matches, the reminder stays armed for the rest of
-# the session, even if a later prompt in the same session doesn't mention it.
+# Memory-intent keywords gate the <related_prior_tasks> auto-injection on
+# prompt submit (see on_prompt hooks) — retrieval only, not the seal reminder.
 MEMORY_INTENT_KEYWORDS = [
     "continue", "resume", "pick up where", "checkpoint", "hand off", "handoff",
     "remember", "recall", "prior work", "previous session", "memory", "seal",
@@ -74,29 +72,19 @@ def cmd_find(args):
 
 def cmd_session_start(args):
     # Create-if-absent: safe to call on every prompt without resetting the
-    # session window or the one-shot reminder flag. `--prompt`, when given,
-    # only ever turns memory_intent on (sticky) — it never turns it back off.
+    # session window or the one-shot reminder flag. `--prompt` is accepted for
+    # backward compatibility with existing hook wiring; it no longer gates
+    # anything (the seal reminder is unconditional).
     path = _sentinel(args.session_id)
-    intent = _mentions_memory(getattr(args, "prompt", None))
     if os.path.exists(path):
-        if intent:
-            try:
-                with open(path, encoding="utf-8") as f:
-                    state = json.load(f)
-            except Exception:
-                return
-            if not state.get("memory_intent"):
-                state["memory_intent"] = True
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(state, f)
         return
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"start": memory._now(), "reminded": False, "memory_intent": intent}, f)
+        json.dump({"start": memory._now(), "reminded": False}, f)
 
 
 def cmd_seal_reminder(args):
     path = _sentinel(args.session_id)
-    state = {"start": "", "reminded": False, "memory_intent": False}
+    state = {"start": "", "reminded": False}
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as f:
@@ -105,11 +93,11 @@ def cmd_seal_reminder(args):
             pass
     if state.get("reminded"):
         return  # fire at most once per session, never loop
-    if not state.get("memory_intent"):
-        return  # this session never signaled it cared about memory; don't nag
 
     since = state.get("start") or ""
-    if os.path.exists(memory.DB_PATH):
+    # No usable session start (sentinel missing/corrupt) means we can't tell
+    # whether anything was saved — nag once rather than silently never enforcing.
+    if since and os.path.exists(memory.DB_PATH):
         conn = memory.connect()
         row = conn.execute(
             "SELECT COUNT(*) AS c FROM checkpoints WHERE created_at >= ?", (since,)

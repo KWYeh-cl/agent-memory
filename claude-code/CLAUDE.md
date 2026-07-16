@@ -19,7 +19,7 @@ Every `memory_*` tool accepts optional `db_path` only for an explicit override.
 - When handing off or finishing: seal the work with `memory_save_checkpoint`
   (rolling summary, outcome, decisions + reasons, open items, large outputs as
   artifacts). Drop trial-and-error.
-- The Stop-hook seal reminder only fires if some prompt in this session showed memory intent (continue/resume/checkpoint/記得/之前/etc.) AND nothing was saved yet; most sessions are never nagged.
+- The Stop hook auto-enforces sealing: if nothing was saved this session, it blocks once and instructs the model to call `memory_save_checkpoint` before finishing. Comply unless no substantive task work happened (pure Q&A, trivial one-liners) — then finish without saving.
 - Prefer summaries and pointers over full content; load artifacts only on demand.
 
 See the `agent-memory` skill for the full protocol.
