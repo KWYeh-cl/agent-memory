@@ -42,7 +42,7 @@
   只是建議；hook 則一定會執行。
 
 **VibeFlow 統一資料庫、延遲建立。** VibeFlow 的所有 task、project 與 worktree
-共用一個位於 VibeFlow User Data 的 `agent_memory.db`；跨使用者時請替換 User Data
+共用一個位於 agent-memory install root 的 `agent_memory.db`；跨使用者時請替換 install root
 根目錄，例如 macOS 可為
 `/Users/you/Library/Application Support/vibeflow/agent_memory.db`。只有某個 session
 真正呼叫 `memory_save_checkpoint` 時才會第一次建立——純讀取的查詢永遠不會建立
@@ -50,11 +50,11 @@
 
 **Claude 與 Codex 的接線差異。** VibeFlow 每次啟動 Claude，都用
 `--mcp-config` 在執行期注入內建 MCP server，並傳入
-`--db <VibeFlow User Data>/agent_memory.db`，所以 Claude 會正確寫入統一資料庫；
+`AGENT_MEMORY_ROOT=<ROOT>` / `<ROOT>/agent_memory.db`，所以 Claude 會正確寫入統一資料庫；
 這不是 Claude CLI 本機全域設定。Codex 沒有這個 launch-time injection，使用
 Python MCP server 時必須在 server `env` 設定
-`AGENT_MEMORY_DB=<VibeFlow User Data>/agent_memory.db`。未設定時 Python server 會
-回退到 cwd-relative `agent_memory.db`，因而可能在 worktree 產生錯誤的資料庫。
+`AGENT_MEMORY_ROOT=<ROOT>`。未設定時 Python server 會
+回退到 non-root `agent_memory.db`，因而可能在 worktree 產生錯誤的資料庫。
 
 **設計上就精簡 token 用量。** `memory_find_related_tasks` 只回傳輕量欄位
 （標題、一行摘要、標籤）——絕不包含 checkpoint 或 artifact 的完整內容。
@@ -102,7 +102,7 @@ sequenceDiagram
     participant Hk as Hooks（保證層）
     participant Ag as Agent（判斷層）
     participant Mc as MCP 工具（正確性層）
-    participant DB as SQLite 儲存區（VibeFlow User Data、延遲建立）
+    participant DB as SQLite 儲存區（agent-memory install root、延遲建立）
 
     U->>Ag: 開始一個任務（任意提問）
     Hk->>Hk: 這次提問本身有沒有顯示記憶意圖？
@@ -147,8 +147,8 @@ sequenceDiagram
 成專案層級而不是全域，加 `--project .`。這裡不會建立任何資料庫——VibeFlow 的
 統一資料庫仍在第一次 `memory_save_checkpoint` 時才延遲建立。
 若同時安裝 Codex，安裝器會把 `AGENT_MEMORY_DB` 寫入其 MCP 設定；預設路徑是
-`~/Library/Application Support/vibeflow/agent_memory.db`，可透過
-`./install.sh --codex --db-path "<VibeFlow User Data>/agent_memory.db"` 覆蓋。
+`<ROOT>/agent_memory.db`，可透過
+`./install.sh --codex` 覆蓋。
 更新既有 user-scope Claude `agent-memory` server 時，安裝器會先保留
 `~/.claude.json.bak`；新增失敗會復原該備份並以非零狀態結束。
 

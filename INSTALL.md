@@ -8,15 +8,14 @@ Clone the repo, then:
 ./install.sh            # Claude Code, user-global (~/.claude)
 ./install.sh --codex    # also wire Codex (~/.codex)
 ./install.sh --project .   # project scope: ./.claude (+ ./.codex) instead of home
-./install.sh --codex --db-path "$HOME/Library/Application Support/vibeflow/agent_memory.db"
 ```
 
 It installs deps and wires the **MCP server + hooks + skill + always-on rules**
 in one shot, resolving every path from this repo — no placeholders to fill.
 Idempotent (re-run to update in place; existing `settings.json`/`CLAUDE.md`
-content is preserved and backed up to `.bak`). It creates **no** DB — VibeFlow's
-single User Data store is lazy and is created on its first checkpoint. Under the
-hood it's `python3 core/install.py`; run that directly to skip the pip step.
+content is preserved and backed up to `.bak`). It initializes the single root
+store at `agent-memory/agent_memory.db` and imports known legacy stores. Under
+the hood it's `python3 core/install.py`; run that directly to skip the pip step.
 Restart your CLI and verify with `/mcp`.
 
 The manual, per-tool steps below are a fallback if you want to wire things by
@@ -35,19 +34,11 @@ cd agent-memory/core
 python3 -m pip install -r requirements.txt        # mcp, pydantic
 ```
 
-That's it — there's no DB to initialize. VibeFlow uses one **shared, lazy**
-database for every task, project, and worktree:
-`<VibeFlow User Data>/agent_memory.db` (for example,
-`/Users/you/Library/Application Support/vibeflow/agent_memory.db`). It is
-created only when a session first calls `memory_save_checkpoint`; read-only
-tools and hooks never create it. Keep `db_path` for an explicit per-call
-override, not routine configuration.
-
-`--db-path` defaults to the packaged macOS VibeFlow User Data location,
-`~/Library/Application Support/vibeflow/agent_memory.db`. Development builds
-use `~/Library/Application Support/vibeflow (development)/agent_memory.db`;
-pass that exact path with `--db-path` when wiring either CLI to a development
-VibeFlow session.
+That's it. The memory store is **single-root**: normal reads and writes use
+`ROOT/agent_memory.db`, where `ROOT` is the installed `agent-memory` folder.
+`AGENT_MEMORY_ROOT` points wrappers at that same root. `AGENT_MEMORY_DB` and
+per-tool `db_path` are explicit migration/admin overrides, not normal task
+routing.
 
 Pick an absolute path for the package, e.g. `/Users/you/agent-memory`. Everywhere
 below, replace `REPLACE_WITH_ABS_PATH` with the parent of that `agent-memory`
@@ -57,14 +48,11 @@ folder. `python3` must be on PATH for the hooks; use a full interpreter path if 
 
 ## Claude Code
 
-1. **MCP server** — inside VibeFlow, do not add a persistent Claude MCP setting:
-   VibeFlow injects its built-in server and `--db <VibeFlow User Data>/agent_memory.db`
-   every time it launches Claude. For standalone Claude Code, copy
-   `claude-code/.mcp.json` to your project root (or merge into an existing one),
-   fix the paths (including the User Data placeholder), and configure the same
-   database path for both MCP and hooks. Or instead run:
+1. **MCP server** — copy `claude-code/.mcp.json` to your project root (or merge
+   into an existing one), fix the paths, and set `AGENT_MEMORY_ROOT` to the
+   installed `agent-memory` folder. Or instead run:
    ```bash
-   ./install.sh --db-path "<VibeFlow User Data>/agent_memory.db"
+   ./install.sh
    ```
 2. **Skill** — copy the folder `skill/agent-memory/` to
    `.claude/skills/agent-memory/` (project) or `~/.claude/skills/agent-memory/`
@@ -75,14 +63,14 @@ folder. `python3` must be on PATH for the hooks; use a full interpreter path if 
    - `UserPromptSubmit` → injects `<related_prior_tasks>`, but only when the
      current prompt itself shows memory intent (continue/resume/checkpoint/
      之前/記得/etc.) — a plain task prompt never triggers the search, and it
-     creates nothing if the shared database has no memory yet
+     creates nothing if the root database has no memory yet
    - `Stop` → reminds to seal, but only if some prompt this session showed
      memory intent **and** nothing was checkpointed yet (fires once)
 4. **Always-on rules** — copy `claude-code/CLAUDE.md` into your project `CLAUDE.md`
    (or append its contents).
 5. Restart Claude Code. Verify: `/mcp` lists `agent-memory`; say something like
    "continue where we left off" and the model should see prior tasks (once any
-   exist in the shared database — a plain task prompt won't trigger the search); say
+   exist in the root database — a plain task prompt won't trigger the search); say
    it again and finish without sealing — the Stop hook nudges.
 
 ---
@@ -90,17 +78,11 @@ folder. `python3` must be on PATH for the hooks; use a full interpreter path if 
 ## Codex CLI
 
 1. **MCP server + hooks** — open `codex/config.toml.snippet`, fix the paths,
-   replace `REPLACE_WITH_VIBEFLOW_USER_DATA_PATH` with the current user's
-   VibeFlow User Data directory, and merge the `[mcp_servers.agent-memory]`
-   (including its `env`) and `[[hooks...]]` blocks into `~/.codex/config.toml`
-   (or `<project>/.codex/config.toml`, which loads only when the project is
-   trusted). Do not set it to a worktree path: Codex lacks VibeFlow's
-   launch-time injection and the Python MCP otherwise falls back to cwd.
-   The installer writes the same value automatically: `./install.sh --codex`
-   defaults to `~/Library/Application Support/vibeflow/agent_memory.db`; pass
-   `--db-path <VibeFlow User Data>/agent_memory.db` when this user's User Data
-   directory differs, including VibeFlow development's `vibeflow (development)`
-   directory. The installer applies the same path to Codex MCP and hooks.
+   and merge the `[mcp_servers.agent-memory]` block (including its
+   `AGENT_MEMORY_ROOT` env) and `[[hooks...]]` blocks into
+   `~/.codex/config.toml` (or `<project>/.codex/config.toml`, which loads only
+   when the project is trusted). Do not point Codex at a worktree path. The
+   installer writes the same root automatically with `./install.sh --codex`.
 2. **Skill** — copy the folder `skill/agent-memory/` to
    `<project>/.agents/skills/agent-memory/` or `~/.codex/skills/agent-memory/`.
 3. **Always-on rules** — copy `codex/AGENTS.md` into your project `AGENTS.md`
@@ -131,19 +113,13 @@ The MCP server and skill are fully portable and identical across both. The hooks
 are the only tool-specific part, and the only place the determinism guarantee lives.
 
 ## Notes
-- **One VibeFlow DB.** Set Codex's MCP `AGENT_MEMORY_DB` to
-  `<VibeFlow User Data>/agent_memory.db`, never a worktree path. VibeFlow's
-  Claude launch already supplies the same path through `--mcp-config`; this is
-  an execution-time injection, not a claimed Claude CLI global setting. Need a
-  one-off different location? Pass `db_path` on the specific `memory_*` call.
-- **User-scope Claude migration.** When a user-scope `agent-memory` server
-  exists, the installer backs up `~/.claude.json` to `.bak`, removes only that
-  server, then adds it again with the current `--db-path`. It never removes an
-  existing server without a recoverable backup; if the add fails, it restores
-  the backup and exits non-zero. A missing prior registration is added normally.
+- **One root DB.** All installed apps and CLIs should use
+  `ROOT/agent_memory.db`. The installer sets `AGENT_MEMORY_ROOT` in managed MCP
+  config so working directory and host app do not change where memory lands.
+  Use `AGENT_MEMORY_DB` or a per-call `db_path` only for migration/admin work.
 - `AGENT_MEMORY_COMPRESS_AT` (default 12) sets when `save_checkpoint` reports
   `compressed: true`. The actual merge needs a model call — see `mem_cli compress`
   to list candidates, then call `memory.apply_compression(...)` from your own script.
 - Sub-agents: each gets its own task_id and seals its own checkpoint; the next
-  agent's opening query can surface it from the shared VibeFlow store. No extra
+  agent's opening query can surface it from the shared root store. No extra
   wiring is needed.

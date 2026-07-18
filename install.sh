@@ -3,9 +3,9 @@
 # Installs deps, then wires the MCP server + hooks + skill + always-on rules
 # into your CLI, resolving all paths from this repo. Idempotent; safe to re-run.
 #
-# No DB is created here: the store is per-project and lazy (created on the first
-# memory_save_checkpoint, at a cwd-relative agent_memory.db). Nothing sets
-# AGENT_MEMORY_DB.
+# The installer initializes the single root memory store at
+# ./agent_memory.db and imports known legacy stores. All CLIs/apps use that
+# install-root DB unless AGENT_MEMORY_DB/AGENT_MEMORY_ROOT is set explicitly.
 #
 # Usage:
 #   ./install.sh                    # Claude Code, user-global (~/.claude)

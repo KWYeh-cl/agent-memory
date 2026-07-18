@@ -11,6 +11,7 @@ venv/
 
 # backups created during setup
 *.bak
+*.bak-*
 
 # os
 .DS_Store

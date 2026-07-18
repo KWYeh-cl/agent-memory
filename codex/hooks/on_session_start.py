@@ -3,8 +3,8 @@
 
 Delegates to the shared Claude Code hook so the hook logic lives in exactly one
 place. Event name / stdin-JSON / output contract are identical between the two
-CLIs (verified against developers.openai.com/codex/hooks). The command wrapper
-sets AGENT_MEMORY_DB to VibeFlow's shared User Data DB before delegating.
+CLIs (verified against developers.openai.com/codex/hooks). DB path resolution
+uses the install-root store by default and happens in the shared hook, not here.
 """
 import os, runpy
 

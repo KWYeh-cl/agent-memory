@@ -28,9 +28,9 @@ mcp = FastMCP("agent_memory_mcp")
 
 # ---- input models ----------------------------------------------------------
 DB_PATH_DESC = (
-    "Absolute path to an explicit memory db override. Omit to use "
-    "AGENT_MEMORY_DB (VibeFlow should set this to its shared User Data db); "
-    "without either, the server falls back to a cwd-relative 'agent_memory.db'."
+    "Optional absolute path to a memory db. Omit to use the single install-root "
+    "store (AGENT_MEMORY_DB, AGENT_MEMORY_ROOT/agent_memory.db, or this "
+    "agent-memory checkout's root agent_memory.db)."
 )
 
 

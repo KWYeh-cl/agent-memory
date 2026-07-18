@@ -1,32 +1,22 @@
 #!/usr/bin/env python3
-"""install.py — wire agent-memory into Claude Code (and optionally Codex),
-resolving every path from this repo's own location. No placeholders to fill.
+"""Wire agent-memory into Claude Code and optionally Codex.
 
-This replaces the old "generate configs into dist/ then hand-merge them
-yourself" flow: clone the repo, run this once, and the MCP server + hooks +
-skill + always-on rules are all registered. Idempotent — re-running updates in
-place (guarded by markers / dedup checks) instead of duplicating anything.
-
-  python3 core/install.py                 # Claude Code, user-global (~/.claude)
-  python3 core/install.py --codex         # also wire Codex (~/.codex)
-  python3 core/install.py --project DIR    # wire into DIR/.claude (+ DIR/.codex) instead of home
-  python3 core/install.py --project . --codex
-  python3 core/install.py --codex --db-path "~/Library/Application Support/vibeflow/agent_memory.db"
-
-There is still no DB here: VibeFlow owns the shared User Data database. The
-installer passes its path to both CLI MCP servers and hooks; without it, the
-Python tooling falls back to its cwd.
+The installed memory store is a single SQLite file at ROOT/agent_memory.db.
+Re-running the installer updates managed config in place and imports known
+legacy stores so every app/CLI points at the same memory after install.
 """
 import argparse
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo root
-PY = sys.executable  # absolute interpreter, so hooks work even if python3 isn't on PATH
+import memory
+import migrate
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PY = sys.executable
 
 MD_START = "<!-- agent-memory:start -->"
 MD_END = "<!-- agent-memory:end -->"
@@ -38,11 +28,7 @@ class McpRegistrationError(RuntimeError):
     """Raised when a user-scope Claude MCP migration could not be completed."""
 
 
-# ---- small IO helpers ------------------------------------------------------
 def read_json(path):
-    """Return parsed JSON, or {} if the file is absent. Abort (never overwrite)
-    if the file exists but is invalid — clobbering a user's settings on a parse
-    error would be silent data loss."""
     if not os.path.exists(path):
         return {}
     try:
@@ -60,12 +46,10 @@ def write_json(path, data):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
-    os.replace(tmp, path)  # atomic; a crash mid-write can't corrupt the original
+    os.replace(tmp, path)
 
 
 def upsert_block(path, body):
-    """Insert/replace `body` between MD markers in a markdown file. Idempotent:
-    a second run swaps the old block for the new one instead of appending."""
     block = f"{MD_START}\n{body.rstrip()}\n{MD_END}\n"
     old = ""
     if os.path.exists(path):
@@ -82,7 +66,6 @@ def upsert_block(path, body):
         f.write(new)
 
 
-# ---- hook wiring -----------------------------------------------------------
 CLAUDE_EVENTS = {
     "SessionStart": "claude-code/hooks/on_session_start.py",
     "UserPromptSubmit": "claude-code/hooks/on_prompt.py",
@@ -90,21 +73,15 @@ CLAUDE_EVENTS = {
 }
 
 
-def hook_cmd(rel, db_path):
-    return " ".join([
-        f"AGENT_MEMORY_DB={shlex.quote(db_path)}",
-        shlex.quote(PY),
-        shlex.quote(os.path.join(ROOT, rel)),
-    ])
+def hook_cmd(rel):
+    return f"{PY} {os.path.join(ROOT, rel)}"
 
 
-def ensure_claude_hooks(settings, db_path):
+def ensure_claude_hooks(settings):
     hooks = settings.setdefault("hooks", {})
     for event, rel in CLAUDE_EVENTS.items():
-        cmd = hook_cmd(rel, db_path)
+        cmd = hook_cmd(rel)
         entries = hooks.setdefault(event, [])
-        # dedup by the hook script path, ignoring which interpreter prefixes it,
-        # so an interpreter change updates in place rather than adding a twin.
         script = os.path.join(ROOT, rel)
         already = any(
             script in h.get("command", "")
@@ -118,11 +95,12 @@ def ensure_claude_hooks(settings, db_path):
                         h["command"] = cmd
         else:
             entries.append({"hooks": [{"type": "command", "command": cmd}]})
+    settings.setdefault("env", {})["AGENT_MEMORY_ROOT"] = ROOT
+    settings["env"].pop("AGENT_MEMORY_DB", None)
     return settings
 
 
-# ---- Claude Code -----------------------------------------------------------
-def wire_claude(project, db_path):
+def wire_claude(project):
     if project:
         base = os.path.join(project, ".claude")
         settings_path = os.path.join(base, "settings.json")
@@ -134,37 +112,33 @@ def wire_claude(project, db_path):
         skills_dir = os.path.join(base, "skills")
         rules_path = os.path.join(base, "CLAUDE.md")
 
-    # 1. skill
     copy_skill(skills_dir)
-
-    # 2. hooks
-    settings = ensure_claude_hooks(read_json(settings_path), db_path)
+    settings = ensure_claude_hooks(read_json(settings_path))
     write_json(settings_path, settings)
     print(f"  hooks   -> {settings_path}")
 
-    # 3. MCP server
-    register_claude_mcp(project, db_path)
+    register_claude_mcp(project)
 
-    # 4. always-on rules
     with open(os.path.join(ROOT, "claude-code/CLAUDE.md"), encoding="utf-8") as f:
         upsert_block(rules_path, f.read())
     print(f"  rules   -> {rules_path}")
 
 
-def register_claude_mcp(project, db_path):
+def agent_memory_server():
+    return {"command": PY, "args": [os.path.join(ROOT, "core/mcp_server.py")],
+            "env": {"AGENT_MEMORY_ROOT": ROOT}}
+
+
+def register_claude_mcp(project):
     server = os.path.join(ROOT, "core/mcp_server.py")
     if project:
-        # project scope: we own .mcp.json — merge it directly, no CLI dependency.
         path = os.path.join(project, ".mcp.json")
         data = read_json(path)
-        data.setdefault("mcpServers", {})["agent-memory"] = {
-            "command": PY, "args": [server], "env": {"AGENT_MEMORY_DB": db_path}
-        }
+        data.setdefault("mcpServers", {})["agent-memory"] = agent_memory_server()
         write_json(path, data)
         print(f"  mcp     -> {path}")
         return
-    # User scope: back up the actual Claude config before replacing an existing
-    # agent-memory server. Never remove without a recoverable backup.
+
     if shutil.which("claude"):
         path = os.path.expanduser("~/.claude.json")
         data = read_json(path)
@@ -191,7 +165,7 @@ def register_claude_mcp(project, db_path):
 
         r = subprocess.run(
             ["claude", "mcp", "add", "-s", "user", "agent-memory", "-e",
-             f"AGENT_MEMORY_DB={db_path}", "--", PY, server],
+             f"AGENT_MEMORY_ROOT={ROOT}", "--", PY, server],
             capture_output=True, text=True,
         )
         if r.returncode == 0:
@@ -204,44 +178,43 @@ def register_claude_mcp(project, db_path):
             "failed to add user-scope agent-memory; restored ~/.claude.json backup: "
             f"{r.stderr.strip() or r.stdout.strip()}"
         )
+
     path = os.path.expanduser("~/.claude.json")
     data = read_json(path)
-    data.setdefault("mcpServers", {})["agent-memory"] = {
-        "command": PY, "args": [server], "env": {"AGENT_MEMORY_DB": db_path}
-    }
+    data.setdefault("mcpServers", {})["agent-memory"] = agent_memory_server()
     write_json(path, data)
     print(f"  mcp     -> {path} (claude CLI not found; edited config directly)")
 
 
-# ---- Codex -----------------------------------------------------------------
-def codex_toml_block(db_path):
+def codex_toml_block():
     server = os.path.join(ROOT, "core/mcp_server.py")
 
-    def command(rel):
-        return hook_cmd(rel, db_path)
+    def hk(rel):
+        return os.path.join(ROOT, rel)
 
     return "\n".join([
         TOML_START,
         "[mcp_servers.agent-memory]",
         f"command = {json.dumps(PY)}",
         f"args = [{json.dumps(server)}]",
+        "",
         "[mcp_servers.agent-memory.env]",
-        f"AGENT_MEMORY_DB = {json.dumps(db_path)}",
+        f"AGENT_MEMORY_ROOT = {json.dumps(ROOT)}",
         "",
         "[[hooks.SessionStart]]",
         "[[hooks.SessionStart.hooks]]",
         'type = "command"',
-        f"command = {json.dumps(command('codex/hooks/on_session_start.py'))}",
+        f"command = {json.dumps(f'{PY} {hk('codex/hooks/on_session_start.py')}')}",
         "",
         "[[hooks.UserPromptSubmit]]",
         "[[hooks.UserPromptSubmit.hooks]]",
         'type = "command"',
-        f"command = {json.dumps(command('codex/hooks/on_prompt.py'))}",
+        f"command = {json.dumps(f'{PY} {hk('codex/hooks/on_prompt.py')}')}",
         "",
         "[[hooks.Stop]]",
         "[[hooks.Stop.hooks]]",
         'type = "command"',
-        f"command = {json.dumps(command('codex/hooks/on_stop.py'))}",
+        f"command = {json.dumps(f'{PY} {hk('codex/hooks/on_stop.py')}')}",
         TOML_END,
         "",
     ])
@@ -265,7 +238,7 @@ def upsert_toml_block(path, block):
         f.write(new)
 
 
-def wire_codex(project, db_path):
+def wire_codex(project):
     if project:
         skills_dir = os.path.join(project, ".agents/skills")
         config_path = os.path.join(project, ".codex/config.toml")
@@ -277,14 +250,13 @@ def wire_codex(project, db_path):
         rules_path = os.path.join(base, "AGENTS.md")
 
     copy_skill(skills_dir)
-    upsert_toml_block(config_path, codex_toml_block(db_path))
+    upsert_toml_block(config_path, codex_toml_block())
     print(f"  config  -> {config_path}")
     with open(os.path.join(ROOT, "codex/AGENTS.md"), encoding="utf-8") as f:
         upsert_block(rules_path, f.read())
     print(f"  rules   -> {rules_path}")
 
 
-# ---- shared ----------------------------------------------------------------
 def copy_skill(skills_dir):
     dest = os.path.join(skills_dir, "agent-memory")
     if os.path.exists(dest):
@@ -293,37 +265,48 @@ def copy_skill(skills_dir):
     print(f"  skill   -> {dest}")
 
 
+def init_root_db():
+    memory.init_db(memory.DB_PATH)
+    print(f"  db      -> {memory.DB_PATH}")
+    imported = [item for item in migrate.merge_databases() if not item.get("skipped")]
+    if not imported:
+        print("  import  -> no legacy DBs found")
+        return
+    for item in imported:
+        print(
+            "  import  -> {source} "
+            "(tasks={tasks}, checkpoints={checkpoints}, artifacts={artifacts}, links={links})"
+            .format(**item)
+        )
+
+
 def main():
     ap = argparse.ArgumentParser(prog="install.py", description="Wire agent-memory into your CLIs.")
     ap.add_argument("--codex", action="store_true", help="also wire Codex")
     ap.add_argument("--project", metavar="DIR",
                     help="install into DIR (project scope) instead of your home config")
-    ap.add_argument(
-        "--db-path",
-        default=os.path.expanduser("~/Library/Application Support/vibeflow/agent_memory.db"),
-        help="VibeFlow shared Agent Memory DB path for CLI wiring (default: %(default)s)",
-    )
     args = ap.parse_args()
 
     project = os.path.abspath(args.project) if args.project else None
-    db_path = os.path.abspath(os.path.expanduser(args.db_path))
     where = f"project {project}" if project else "user-global (home)"
     print(f"agent-memory: wiring from {ROOT}\n  target  -> {where}\n")
 
+    print("Memory store:")
+    init_root_db()
+    print("")
+
     try:
         print("Claude Code:")
-        wire_claude(project, db_path)
+        wire_claude(project)
         if args.codex:
             print("\nCodex:")
-            wire_codex(project, db_path)
+            wire_codex(project)
     except McpRegistrationError as e:
         print(f"! agent-memory installation failed: {e}", file=sys.stderr)
         return 1
 
     print("\nDone. Restart your CLI, then verify with /mcp (lists agent-memory).")
-    print("No db was created — VibeFlow creates its shared User Data db on the first checkpoint.")
-    if args.codex:
-        print(f"Codex AGENT_MEMORY_DB -> {db_path}")
+    print(f"All default memory reads/writes now use {memory.DB_PATH}.")
     return 0
 
 

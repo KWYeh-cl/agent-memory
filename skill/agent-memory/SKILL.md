@@ -18,15 +18,11 @@ store summaries + pointers, load detail only on demand.
 - `memory_get_task_detail(task_id)` — a task's summary, checkpoints, artifact pointers.
 - `memory_get_artifact(artifact_id)` — one heavy artifact body. Expensive; use sparingly.
 - `memory_save_checkpoint(...)` — seal a stage of work. Nothing is created before this:
-  the shared store is lazily initialized on the first call.
+  the install-root store is initialized by the installer and reused everywhere.
 - `memory_link_tasks(from, to, relation)` — record a stable relationship.
 
-Every tool takes an optional `db_path`. In VibeFlow, the default is the single
-`<VibeFlow User Data>/agent_memory.db` shared by all tasks, projects, and
-worktrees. Use `db_path` only for an explicit override. Claude receives this
-path from VibeFlow's launch-time `--mcp-config` injection; Codex must receive it
-through the MCP server's `AGENT_MEMORY_DB` environment variable. Without that
-Codex setting, the Python server falls back to a cwd-relative `agent_memory.db`.
+Every tool takes an optional `db_path` for migration/admin overrides. Normal use
+omits it so every app and CLI uses the same install-root `agent_memory.db`.
 
 ## Starting a task
 A prompt-submit hook injects a `<related_prior_tasks>` block, but only when the

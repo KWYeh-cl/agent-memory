@@ -21,13 +21,31 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 
-DB_PATH = os.environ.get("AGENT_MEMORY_DB", "agent_memory.db")
 COMPRESS_THRESHOLD = int(os.environ.get("AGENT_MEMORY_COMPRESS_AT", "12"))
 
 # Resolve bundled files relative to this module so callers work from any cwd
 # (the MCP server is launched from the CLI's working dir, not this directory).
 _HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(_HERE)
 SCHEMA_PATH = os.path.join(_HERE, "schema.sql")
+DB_FILE = "agent_memory.db"
+
+
+def default_db_path() -> str:
+    """Return the single install-root memory store path.
+
+    Normal installs should let every CLI/app use this default. AGENT_MEMORY_DB
+    remains an explicit escape hatch for migration/admin work, while
+    AGENT_MEMORY_ROOT lets wrapper apps point at the same installed root.
+    """
+    explicit = os.environ.get("AGENT_MEMORY_DB")
+    if explicit:
+        return os.path.abspath(os.path.expanduser(explicit))
+    root = os.environ.get("AGENT_MEMORY_ROOT") or ROOT
+    return os.path.join(os.path.abspath(os.path.expanduser(root)), DB_FILE)
+
+
+DB_PATH = default_db_path()
 
 
 def _now() -> str:
@@ -46,6 +64,7 @@ def connect(db_path: str = DB_PATH) -> sqlite3.Connection:
 
 
 def init_db(db_path: str = DB_PATH, schema_path: str = SCHEMA_PATH) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(db_path)) or ".", exist_ok=True)
     with open(schema_path, "r", encoding="utf-8") as f:
         schema = f.read()
     conn = connect(db_path)

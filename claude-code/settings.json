@@ -1,23 +1,26 @@
 {
+  "env": {
+    "AGENT_MEMORY_ROOT": "REPLACE_WITH_ABS_PATH/agent-memory"
+  },
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "AGENT_MEMORY_DB='REPLACE_WITH_VIBEFLOW_USER_DATA_PATH/agent_memory.db' python3 REPLACE_WITH_ABS_PATH/agent-memory/claude-code/hooks/on_session_start.py" }
+          { "type": "command", "command": "python3 REPLACE_WITH_ABS_PATH/agent-memory/claude-code/hooks/on_session_start.py" }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "AGENT_MEMORY_DB='REPLACE_WITH_VIBEFLOW_USER_DATA_PATH/agent_memory.db' python3 REPLACE_WITH_ABS_PATH/agent-memory/claude-code/hooks/on_prompt.py" }
+          { "type": "command", "command": "python3 REPLACE_WITH_ABS_PATH/agent-memory/claude-code/hooks/on_prompt.py" }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "AGENT_MEMORY_DB='REPLACE_WITH_VIBEFLOW_USER_DATA_PATH/agent_memory.db' python3 REPLACE_WITH_ABS_PATH/agent-memory/claude-code/hooks/on_stop.py" }
+          { "type": "command", "command": "python3 REPLACE_WITH_ABS_PATH/agent-memory/claude-code/hooks/on_stop.py" }
         ]
       }
     ]
